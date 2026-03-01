@@ -31,10 +31,15 @@ async def onboard():
     # 2. Minimum API Key
     print("\n[2/2] Primary AI Provider API Key")
     print("Moticlaw needs at least one API key to start.")
-    print("Supported providers: openai, anthropic, groq, gemini")
+    supported_providers = [
+        "openai", "anthropic", "groq", "gemini", "nvidia", "cerebras", 
+        "sambanova", "openrouter", "deepinfra", "mistral", "hyperbolic", 
+        "scaleway", "siliconflow", "together", "huggingface", "replicate"
+    ]
+    print(f"Supported providers: {', '.join(supported_providers)}")
     
     provider = ""
-    while provider not in ["openai", "anthropic", "groq", "gemini", "skip"]:
+    while provider not in supported_providers + ["skip"]:
         print("Enter provider name (or 'skip'):")
         provider = input("> ").strip().lower()
         

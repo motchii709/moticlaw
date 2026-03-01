@@ -22,15 +22,39 @@ async def init_db():
                 PRIMARY KEY (provider, model_name)
             )
         ''')
+        await db.execute('''
+            CREATE TABLE IF NOT EXISTS messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                channel_id TEXT NOT NULL,
+                role TEXT NOT NULL,
+                content TEXT NOT NULL,
+                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
         
         # default models
-        await db.execute('''
-            INSERT OR IGNORE INTO models (provider, model_name) VALUES
+        models = [
             ('openai', 'gpt-4o'),
             ('anthropic', 'claude-3-5-sonnet-20240620'),
             ('groq', 'llama-3.1-8b-instant'),
-            ('gemini', 'gemini-1.5-flash')
-        ''')
+            ('gemini', 'gemini-1.5-flash'),
+            ('nvidia', 'meta/llama-3.1-405b-instruct'),
+            ('cerebras', 'llama3.1-70b'),
+            ('sambanova', 'Meta-Llama-3.1-70B-Instruct'),
+            ('openrouter', 'meta-llama/llama-3.1-8b-instruct:free'),
+            ('deepinfra', 'meta-llama/Meta-Llama-3.1-70B-Instruct'),
+            ('mistral', 'codestral-latest'),
+            ('hyperbolic', 'meta-llama/Meta-Llama-3.1-70B-Instruct'),
+            ('scaleway', 'llama-3.1-70b-instruct'),
+            ('siliconflow', 'vendor/meta-llama/Meta-Llama-3.1-70B-Instruct'),
+            ('together', 'meta-llama/Meta-Llama-3.1-70B-Instruct'),
+            ('huggingface', 'meta-llama/Meta-Llama-3.1-70B-Instruct'),
+            ('replicate', 'meta/meta-llama-3.1-405b-instruct')
+        ]
+        
+        await db.executemany('''
+            INSERT OR IGNORE INTO models (provider, model_name) VALUES (?, ?)
+        ''', models)
         
         await db.commit()
 
@@ -47,6 +71,29 @@ async def set_api_key(provider: str, api_key: str):
             VALUES (?, ?)
             ON CONFLICT(provider) DO UPDATE SET api_key=excluded.api_key
         ''', (provider, api_key))
+        await db.commit()
+
+async def add_message(channel_id: str, role: str, content: str):
+    async with aiosqlite.connect(DB_FILE) as db:
+        await db.execute('INSERT INTO messages (channel_id, role, content) VALUES (?, ?, ?)', (channel_id, role, content))
+        # Keep only last 20 messages per channel
+        await db.execute('''
+            DELETE FROM messages WHERE id IN (
+                SELECT id FROM messages WHERE channel_id = ? ORDER BY timestamp DESC LIMIT -1 OFFSET 20
+            )
+        ''', (channel_id,))
+        await db.commit()
+
+async def get_messages(channel_id: str):
+    async with aiosqlite.connect(DB_FILE) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute('SELECT role, content FROM messages WHERE channel_id = ? ORDER BY timestamp ASC', (channel_id,)) as cursor:
+            rows = await cursor.fetchall()
+            return [{"role": r["role"], "content": r["content"]} for r in rows]
+
+async def clear_messages(channel_id: str):
+    async with aiosqlite.connect(DB_FILE) as db:
+        await db.execute('DELETE FROM messages WHERE channel_id = ?', (channel_id,))
         await db.commit()
 
 async def get_active_models():
@@ -81,7 +128,6 @@ async def update_model_health(provider: str, model_name: str, success: bool):
 
 async def resurrect_models():
     async with aiosqlite.connect(DB_FILE) as db:
-        # Resurrect models that have been disabled for more than 30 minutes
         await db.execute('''
             UPDATE models 
             SET is_disabled = 0, failure_count = 0, score = 50

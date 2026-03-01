@@ -128,7 +128,7 @@ Current Configuration:
 Available Configuration Actions:
 - SET_ADMIN_CHANNEL: Change 'admin_channel_id'
 - SET_HEARTBEAT_INTERVAL: Change 'heartbeat_interval_minutes' (integer)
-- REGISTER_KEY: Add/Update API key for 'openai', 'anthropic', 'groq', 'gemini', 'nvidia', 'cerebras', 'sambanova', 'openrouter', 'deepinfra', 'mistral', 'hyperbolic', 'scaleway', 'siliconflow', 'together', 'huggingface', 'replicate'
+- REGISTER_KEY: Add/Update API key for 'openai', 'anthropic', 'groq', 'gemini', 'nvidia', 'cerebras', 'sambanova', 'openrouter', 'deepinfra', 'mistral', 'hyperbolic', 'scaleway', 'siliconflow', 'together', 'huggingface', 'replicate', 'tavily'
 
 If the user asks to change a setting, respond naturally, AND include a JSON block at the end of your message:
 ```json

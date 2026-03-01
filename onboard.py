@@ -34,7 +34,8 @@ async def onboard():
     supported_providers = [
         "openai", "anthropic", "groq", "gemini", "nvidia", "cerebras", 
         "sambanova", "openrouter", "deepinfra", "mistral", "hyperbolic", 
-        "scaleway", "siliconflow", "together", "huggingface", "replicate"
+        "scaleway", "siliconflow", "together", "huggingface", "replicate",
+        "tavily"
     ]
     print(f"Supported providers: {', '.join(supported_providers)}")
     

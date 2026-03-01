@@ -105,13 +105,79 @@ async def on_message(message: discord.Message):
     if bot.user in message.mentions or isinstance(message.channel, discord.DMChannel):
         async with message.channel.typing():
             try:
-                # Provide minimal context of the message that was sent
+                # Load current state for AI context
+                import config
+                import database
+                import json
+                
+                cfg = await config.load_config()
+                models = await database.get_active_models()
+                models_str = ", ".join([f"{m['provider']}/{m['model_name']}" for m in models])
+                
+                system_prompt = f"""
+You are Moticlaw. You are currently chatting with a user in Discord.
+Your goal is to be helpful and also assist with your own configuration if requested.
+
+Current Configuration:
+- Admin Channel ID: {cfg.get('admin_channel_id')}
+- Heartbeat Interval: {cfg.get('heartbeat_interval_minutes')} minutes
+- Active Models: {models_str}
+
+Available Configuration Actions:
+- SET_ADMIN_CHANNEL: Change 'admin_channel_id'
+- SET_HEARTBEAT_INTERVAL: Change 'heartbeat_interval_minutes' (integer)
+- REGISTER_KEY: Add/Update API key for 'openai', 'anthropic', 'groq', or 'gemini'
+
+If the user asks to change a setting, respond naturally, AND include a JSON block at the end of your message:
+```json
+{{
+  "action": "ACTION_NAME",
+  "params": {{ "key": "value" }}
+}}
+```
+Values for params:
+- SET_ADMIN_CHANNEL: {{ "channel_id": "number" }}
+- SET_HEARTBEAT_INTERVAL: {{ "minutes": number }}
+- REGISTER_KEY: {{ "provider": "name", "api_key": "key" }}
+"""
                 messages = [
-                    {"role": "system", "content": "You are Moticlaw. Respond conversationally to the user."},
+                    {"role": "system", "content": system_prompt},
                     {"role": "user", "content": message.content}
                 ]
                 response = await chat_completion(messages)
                 
+                # Check for actions
+                if "```json" in response:
+                    try:
+                        json_str = response.split("```json")[1].split("```")[0].strip()
+                        action_data = json.loads(json_str)
+                        action = action_data.get("action")
+                        params = action_data.get("params", {})
+                        
+                        if action == "SET_ADMIN_CHANNEL":
+                            new_id = params.get("channel_id")
+                            if new_id:
+                                cfg["admin_channel_id"] = int(new_id)
+                                await config.save_config(cfg)
+                                response += f"\n\n✅ Admin channel set to {new_id}."
+                        
+                        elif action == "SET_HEARTBEAT_INTERVAL":
+                            mins = params.get("minutes")
+                            if mins:
+                                cfg["heartbeat_interval_minutes"] = int(mins)
+                                await config.save_config(cfg)
+                                response += f"\n\n✅ Heartbeat interval set to {mins} minutes."
+                                
+                        elif action == "REGISTER_KEY":
+                            p = params.get("provider")
+                            k = params.get("api_key")
+                            if p and k:
+                                await database.set_api_key(p, k)
+                                response += f"\n\n✅ API Key for {p} updated."
+                                
+                    except Exception as e:
+                        logger.error(f"Failed to process AI action: {e}")
+
                 # Split large messages
                 for i in range(0, len(response), 2000):
                     await message.reply(response[i:i+2000])

@@ -105,16 +105,18 @@ async def on_message(message: discord.Message):
     if bot.user in message.mentions or isinstance(message.channel, discord.DMChannel):
         async with message.channel.typing():
             try:
-                # Load current state for AI context
+                # Load context and history
                 import config
                 import database
                 import json
                 
                 cfg = await config.load_config()
+                history = await database.get_messages(str(message.channel.id))
+                
                 models = await database.get_active_models()
                 models_str = ", ".join([f"{m['provider']}/{m['model_name']}" for m in models])
                 
-                system_prompt = f"""
+                system_prompt_content = f"""
 You are Moticlaw. You are currently chatting with a user in Discord.
 Your goal is to be helpful and also assist with your own configuration if requested.
 
@@ -126,7 +128,7 @@ Current Configuration:
 Available Configuration Actions:
 - SET_ADMIN_CHANNEL: Change 'admin_channel_id'
 - SET_HEARTBEAT_INTERVAL: Change 'heartbeat_interval_minutes' (integer)
-- REGISTER_KEY: Add/Update API key for 'openai', 'anthropic', 'groq', or 'gemini'
+- REGISTER_KEY: Add/Update API key for 'openai', 'anthropic', 'groq', 'gemini', 'nvidia', 'cerebras', 'sambanova', 'openrouter', 'deepinfra', 'mistral', 'hyperbolic', 'scaleway', 'siliconflow', 'together', 'huggingface', 'replicate'
 
 If the user asks to change a setting, respond naturally, AND include a JSON block at the end of your message:
 ```json
@@ -135,16 +137,13 @@ If the user asks to change a setting, respond naturally, AND include a JSON bloc
   "params": {{ "key": "value" }}
 }}
 ```
-Values for params:
-- SET_ADMIN_CHANNEL: {{ "channel_id": "number" }}
-- SET_HEARTBEAT_INTERVAL: {{ "minutes": number }}
-- REGISTER_KEY: {{ "provider": "name", "api_key": "key" }}
 """
-                messages = [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": message.content}
-                ]
-                response = await chat_completion(messages)
+                system_prompt = {"role": "system", "content": system_prompt_content}
+                
+                # Prepend system prompt to history
+                full_messages = [system_prompt] + history + [{"role": "user", "content": message.content}]
+                
+                response = await chat_completion(full_messages)
                 
                 # Check for actions
                 if "```json" in response:
@@ -177,6 +176,10 @@ Values for params:
                                 
                     except Exception as e:
                         logger.error(f"Failed to process AI action: {e}")
+
+                # Save to history
+                await database.add_message(str(message.channel.id), "user", message.content)
+                await database.add_message(str(message.channel.id), "assistant", response)
 
                 # Split large messages
                 for i in range(0, len(response), 2000):

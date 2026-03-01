@@ -41,6 +41,12 @@ You MUST output your final decision in the following JSON format:
       "filename": "extensions/new_skill.py",
       "code": "print('hello')"
     }
+  ],
+  "shell_actions": [
+    {
+      "type": "shell_command",
+      "command": "git status"
+    }
   ]
 }
 ```

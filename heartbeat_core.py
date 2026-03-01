@@ -95,6 +95,26 @@ Recent Activity: {recent_context}
                     except Exception as e:
                         logger.error(f"Failed to load extension {module_name}: {e}")
 
+        # Execute shell actions
+        shell_actions = decision.get("shell_actions", [])
+        for action in shell_actions:
+            if action.get("type") == "shell_command":
+                cmd = action.get("command")
+                if cmd:
+                    logger.info(f"Executing shell command: {cmd}")
+                    try:
+                        process = await asyncio.create_subprocess_shell(
+                            cmd,
+                            stdout=asyncio.subprocess.PIPE,
+                            stderr=asyncio.subprocess.PIPE
+                        )
+                        stdout, stderr = await process.communicate()
+                        result = stdout.decode().strip() or stderr.decode().strip()
+                        logger.info(f"Command output: {result}")
+                        # In the next cycle, the AI can know the result via context
+                    except Exception as e:
+                        logger.error(f"Shell command failed: {e}")
+
         # Post the heartbeat report to Discord
         if admin_channel_id:
             channel = bot.get_channel(admin_channel_id)

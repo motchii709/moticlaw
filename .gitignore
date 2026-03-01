@@ -1,0 +1,16 @@
+# Secrets
+.env
+moticlaw.db
+config.json
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+venv/
+env/
+.venv/
+
+# Extensions (optional, if you want users to have local extensions not pushed to git)
+# extensions/*.py
+# !extensions/__init__.py

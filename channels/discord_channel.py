@@ -110,11 +110,15 @@ async def on_message(message: discord.Message):
                 import database
                 import json
                 
+                from tools.registry import registry
+                
                 cfg = await config.load_config()
                 history = await database.get_messages(str(message.channel.id))
                 
                 models = await database.get_active_models()
                 models_str = ", ".join([f"{m['provider']}/{m['model_name']}" for m in models])
+                
+                tools_metadata = registry.get_all_tools_metadata()
                 
                 system_prompt_content = f"""
 You are Moticlaw. You are currently chatting with a user in Discord.
@@ -125,16 +129,17 @@ Current Configuration:
 - Heartbeat Interval: {cfg.get('heartbeat_interval_minutes')} minutes
 - Active Models: {models_str}
 
-Available Configuration Actions:
-- SET_ADMIN_CHANNEL: Change 'admin_channel_id'
-- SET_HEARTBEAT_INTERVAL: Change 'heartbeat_interval_minutes' (integer)
-- REGISTER_KEY: Add/Update API key for 'openai', 'anthropic', 'groq', 'gemini', 'nvidia', 'cerebras', 'sambanova', 'openrouter', 'deepinfra', 'mistral', 'hyperbolic', 'scaleway', 'siliconflow', 'together', 'huggingface', 'replicate', 'tavily'
+Available Tools:
+{json.dumps(tools_metadata, indent=2)}
 
-If the user asks to change a setting, respond naturally, AND include a JSON block at the end of your message:
+If the user asks to perform an action or change a setting, use the available tools. 
+Respond naturally, AND include a JSON block at the end of your message if tools are needed:
 ```json
 {{
-  "action": "ACTION_NAME",
-  "params": {{ "key": "value" }}
+  "thought": "Brief explanation of why these tools are being called",
+  "tool_calls": [
+    {{ "name": "tool_name", "parameters": {{ "key": "value" }} }}
+  ]
 }}
 ```
 """
@@ -145,37 +150,31 @@ If the user asks to change a setting, respond naturally, AND include a JSON bloc
                 
                 response = await chat_completion(full_messages)
                 
-                # Check for actions
+                # Check for actions/tool_calls
                 if "```json" in response:
                     try:
                         json_str = response.split("```json")[1].split("```")[0].strip()
-                        action_data = json.loads(json_str)
-                        action = action_data.get("action")
-                        params = action_data.get("params", {})
+                        decision = json.loads(json_str)
                         
-                        if action == "SET_ADMIN_CHANNEL":
-                            new_id = params.get("channel_id")
-                            if new_id:
-                                cfg["admin_channel_id"] = int(new_id)
-                                await config.save_config(cfg)
-                                response += f"\n\n✅ Admin channel set to {new_id}."
+                        tool_calls = decision.get("tool_calls", [])
+                        tool_results = []
                         
-                        elif action == "SET_HEARTBEAT_INTERVAL":
-                            mins = params.get("minutes")
-                            if mins:
-                                cfg["heartbeat_interval_minutes"] = int(mins)
-                                await config.save_config(cfg)
-                                response += f"\n\n✅ Heartbeat interval set to {mins} minutes."
-                                
-                        elif action == "REGISTER_KEY":
-                            p = params.get("provider")
-                            k = params.get("api_key")
-                            if p and k:
-                                await database.set_api_key(p, k)
-                                response += f"\n\n✅ API Key for {p} updated."
+                        for call in tool_calls:
+                            tool_name = call.get("name")
+                            params = call.get("parameters", {})
+                            
+                            tool = registry.get_tool(tool_name)
+                            if tool:
+                                logger.info(f"Executing tool '{tool_name}' with params {params}")
+                                result = await tool.execute(**params)
+                                tool_results.append({"tool": tool_name, "result": result})
+                                response += f"\n\n🛠️ **Tool: {tool_name}**\nOutput: {result}"
+                            else:
+                                logger.error(f"Tool '{tool_name}' not found.")
+                                tool_results.append({"tool": tool_name, "result": "Error: Tool not found"})
                                 
                     except Exception as e:
-                        logger.error(f"Failed to process AI action: {e}")
+                        logger.error(f"Failed to process AI tool calls: {e}")
 
                 # Save to history
                 await database.add_message(str(message.channel.id), "user", message.content)

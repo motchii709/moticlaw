@@ -1,10 +1,28 @@
 import asyncio
 import os
-from dotenv import set_key
-import database
 import sys
+import subprocess
+from dotenv import set_key
+
+def check_dependencies():
+    print("Checking dependencies...")
+    try:
+        import aiosqlite
+        import discord
+        import dotenv
+        print("✅ Dependencies found.")
+    except ImportError:
+        print("❌ Missing dependencies. Installing from requirements.txt...")
+        try:
+            subprocess.check_call([sys.executable, "-m", "pip", "install", "-r", "requirements.txt"])
+            print("✅ Dependencies installed successfully.")
+        except Exception as e:
+            print(f"❌ Failed to install dependencies: {e}")
+            print("Please run 'python -m pip install -r requirements.txt' manually.")
+            sys.exit(1)
 
 async def onboard():
+    import database # Import here after ensuring dependencies are met
     print("========================================")
     print("Welcome to Moticlaw Onboarding!")
     print("This script will set up the bare minimum requirements.")
@@ -61,6 +79,7 @@ async def onboard():
 
 if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "onboard":
+        check_dependencies()
         asyncio.run(onboard())
     else:
         print("Usage: python onboard.py onboard")

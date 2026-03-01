@@ -6,8 +6,12 @@ import aiofiles
 import datetime
 import importlib
 from model_router import chat_completion
+from tools.registry import registry
 
 logger = logging.getLogger(__name__)
+
+# Initialize tools on module load
+registry.load_tools("tools")
 
 async def read_file(path: str) -> str:
     try:
@@ -26,14 +30,15 @@ async def write_file(path: str, content: str):
         logger.error(f"Failed to write {path}: {e}")
 
 async def execute_heartbeat(bot, admin_channel_id: int, next_interval_minutes: int):
-    """Executes the core cognitive heartbeat cycle."""
+    """Executes the core cognitive heartbeat cycle with Tool Support."""
     logger.info("Executing Heartbeat Cycle...")
     
     soul_content = await read_file("SOUL.md")
     heartbeat_content = await read_file("HEARTBEAT.md")
     
-    # Gather system context
-    # (In a real implementation, we'd fetch actual unread messages from a local buffer)
+    # Gather tools metadata for the AI
+    tools_metadata = registry.get_all_tools_metadata()
+    
     recent_context = "No new unread messages in the last cycle."
     
     system_prompt = f"""
@@ -46,6 +51,9 @@ Follow the architecture defined in your files.
 --- HEARTBEAT.md ---
 {heartbeat_content}
 
+--- Available Tools ---
+{json.dumps(tools_metadata, indent=2)}
+
 --- Current Context ---
 Time: {datetime.datetime.now().isoformat()}
 Recent Activity: {recent_context}
@@ -53,14 +61,12 @@ Recent Activity: {recent_context}
 
     messages = [
         {"role": "system", "content": system_prompt},
-        {"role": "user", "content": "Execute your heartbeat cycle and return the required JSON payload."}
+        {"role": "user", "content": "Execute your heartbeat cycle and return the required JSON payload with tool_calls for any actions."}
     ]
     
     try:
         response_text = await chat_completion(messages)
         
-        # Parse the JSON response
-        # Quick and dirty json extraction in case the model wraps it in markdown blocks
         if "```json" in response_text:
             json_str = response_text.split("```json")[1].split("```")[0].strip()
         else:
@@ -71,7 +77,24 @@ Recent Activity: {recent_context}
         status_summary = decision.get("status_summary", "思考完了")
         improvement_memory = decision.get("improvement_memory", "特になし")
         
-        # Execute system actions (like creating extensions)
+        # Unified Tool Execution
+        tool_calls = decision.get("tool_calls", [])
+        tool_results = []
+        
+        for call in tool_calls:
+            tool_name = call.get("name")
+            params = call.get("parameters", {})
+            
+            tool = registry.get_tool(tool_name)
+            if tool:
+                logger.info(f"Executing tool '{tool_name}' with params {params}")
+                result = await tool.execute(**params)
+                tool_results.append({"tool": tool_name, "result": result})
+            else:
+                logger.error(f"Tool '{tool_name}' not found.")
+                tool_results.append({"tool": tool_name, "result": "Error: Tool not found"})
+
+        # (Special handling for extension creation if not moved to a tool yet)
         sys_actions = decision.get("system_actions", [])
         for action in sys_actions:
             if action.get("type") == "create_extension":
@@ -84,8 +107,6 @@ Recent Activity: {recent_context}
                         filename += ".py"
                     await write_file(filename, code)
                     logger.info(f"Created new extension: {filename}")
-                    
-                    # Try to reload if it's a bot cog
                     try:
                         module_name = filename.replace("/", ".").replace(".py", "")
                         if module_name in bot.extensions:
@@ -95,40 +116,19 @@ Recent Activity: {recent_context}
                     except Exception as e:
                         logger.error(f"Failed to load extension {module_name}: {e}")
 
-        # Execute shell actions
-        shell_actions = decision.get("shell_actions", [])
-        for action in shell_actions:
-            if action.get("type") == "shell_command":
-                cmd = action.get("command")
-                if cmd:
-                    logger.info(f"Executing shell command: {cmd}")
-                    try:
-                        process = await asyncio.create_subprocess_shell(
-                            cmd,
-                            stdout=asyncio.subprocess.PIPE,
-                            stderr=asyncio.subprocess.PIPE
-                        )
-                        stdout, stderr = await process.communicate()
-                        result = stdout.decode().strip() or stderr.decode().strip()
-                        logger.info(f"Command output: {result}")
-                        # In the next cycle, the AI can know the result via context
-                    except Exception as e:
-                        logger.error(f"Shell command failed: {e}")
-
         # Post the heartbeat report to Discord
         if admin_channel_id:
             channel = bot.get_channel(admin_channel_id)
             if channel:
-                active_models = sum(1 for line in (await chat_completion([{"role":"user", "content":"test"}]) and []) if '✅' in line) # mock
-                # To get actual health, we'd query DB, but linking it simply here:
                 import database
                 models = await database.get_active_models()
                 total = len(models)
                 healthy = sum(1 for m in models if m['score'] == 100)
                 
+                tool_summary = f"\nツール実行: {len(tool_results)}件" if tool_results else ""
                 report = f"""🫀 [HEARTBEAT {datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}] moticlaw is THINKING ✅
 健康モデル: {healthy}/{total}
-今回のターン: {status_summary}
+今回のターン: {status_summary}{tool_summary}
 改善メモリ更新: 1件 ({improvement_memory[:20]}...)
 次Heartbeat: {next_interval_minutes}分後
 """

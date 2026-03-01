@@ -7,4 +7,10 @@ aiosqlite>=0.20.0
 apscheduler>=3.10.4
 cryptography>=42.0.5
 python-dotenv>=1.0.1
-aiofiles>=23.2.1
+aiofiles
+aiohttp
+tavily-python
+browser-use
+playwright
+langchain-openai
+langchain-google-genai

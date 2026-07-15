@@ -771,7 +771,7 @@ func testCronRegister() []result {
 
 	return []result{
 		runTest("cron_register: register valid job", 10*time.Second, func() error {
-			tool := tools.NewCronRegisterTool(testUserID)
+			tool := tools.NewCronRegisterTool(testUserID, "")
 			result, err := tool.Execute(context.Background(), map[string]interface{}{
 				"interval": "10m",
 				"command":  "echo test",
@@ -795,7 +795,7 @@ func testCronRegister() []result {
 			return nil
 		}),
 		runTest("cron_register: interval too short", 5*time.Second, func() error {
-			tool := tools.NewCronRegisterTool(testUserID)
+			tool := tools.NewCronRegisterTool(testUserID, "")
 			_, err := tool.Execute(context.Background(), map[string]interface{}{
 				"interval": "1m",
 				"command":  "echo test",
@@ -809,7 +809,7 @@ func testCronRegister() []result {
 			return nil
 		}),
 		runTest("cron_register: missing params", 5*time.Second, func() error {
-			tool := tools.NewCronRegisterTool(testUserID)
+			tool := tools.NewCronRegisterTool(testUserID, "")
 			_, err := tool.Execute(context.Background(), map[string]interface{}{})
 			if err == nil {
 				return fmt.Errorf("expected error for missing params, got nil")
@@ -881,7 +881,7 @@ func testRateLimiter() []result {
 func testToolsRegistry() []result {
 	return []result{
 		runTest("Registry: DefaultRegistry has all tools", 2*time.Second, func() error {
-			reg, err := tools.DefaultRegistry(workDir, testUserID, sandboxQueue, webSearchLimiter, webFetchLimiter, nil)
+			reg, err := tools.DefaultRegistry(workDir, testUserID, "", sandboxQueue, webSearchLimiter, webFetchLimiter, nil)
 			if err != nil {
 				return fmt.Errorf("DefaultRegistry failed: %w", err)
 			}
@@ -901,7 +901,7 @@ func testToolsRegistry() []result {
 			return nil
 		}),
 		runTest("Registry: GetDefinitions returns valid JSON schemas", 2*time.Second, func() error {
-			reg, err := tools.DefaultRegistry(workDir, testUserID, sandboxQueue, webSearchLimiter, webFetchLimiter, nil)
+			reg, err := tools.DefaultRegistry(workDir, testUserID, "", sandboxQueue, webSearchLimiter, webFetchLimiter, nil)
 			if err != nil {
 				return fmt.Errorf("DefaultRegistry failed: %w", err)
 			}

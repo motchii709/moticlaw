@@ -2,6 +2,7 @@ package discord
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -13,6 +14,7 @@ import (
 	"github.com/bwmarrin/discordgo"
 	"github.com/moti/moticlaw/internal/conversation"
 	"github.com/moti/moticlaw/internal/llm"
+	"github.com/moti/moticlaw/internal/sandbox"
 	"github.com/moti/moticlaw/internal/security"
 	"github.com/moti/moticlaw/internal/store"
 	"github.com/moti/moticlaw/internal/tools"
@@ -87,6 +89,11 @@ func (b *Bot) Run(ctx context.Context) error {
 		log.Printf("Warning: failed to register commands: %v", err)
 	}
 
+	// cronスケジューラを起動
+	cronCtx, cronCancel := context.WithCancel(ctx)
+	defer cronCancel()
+	go b.cronScheduler(cronCtx)
+
 	log.Println("Bot is now running. Press Ctrl+C to exit.")
 	<-ctx.Done()
 	return nil
@@ -122,25 +129,27 @@ func (b *Bot) registerCommands() error {
 			Description: "使用するプライマリモデルの設定",
 			Options: []*discordgo.ApplicationCommandOption{
 				{
-					Name:        "action",
-					Description: "set or list",
-					Type:        discordgo.ApplicationCommandOptionString,
-					Required:    true,
-					Choices: []*discordgo.ApplicationCommandOptionChoice{
-						{Name: "set", Value: "set"},
-						{Name: "list", Value: "list"},
+					Type:        discordgo.ApplicationCommandOptionSubCommand,
+					Name:        "set",
+					Description: "モデルを設定",
+					Options: []*discordgo.ApplicationCommandOption{
+						{
+							Name:        "model",
+							Description: "モデル名",
+							Type:        discordgo.ApplicationCommandOptionString,
+							Required:    true,
+							Choices: []*discordgo.ApplicationCommandOptionChoice{
+								{Name: "gemma-4-26b", Value: "gemma-4-26b-a4b-it"},
+								{Name: "gemma-4-31b", Value: "gemma-4-31b-it"},
+								{Name: "gemini-lite", Value: "gemini-lite"},
+							},
+						},
 					},
 				},
 				{
-					Name:        "model",
-					Description: "モデル名",
-					Type:        discordgo.ApplicationCommandOptionString,
-					Required:    false,
-					Choices: []*discordgo.ApplicationCommandOptionChoice{
-						{Name: "gemma-4-26b", Value: "gemma-4-26b-a4b-it"},
-						{Name: "gemma-4-31b", Value: "gemma-4-31b-it"},
-						{Name: "gemini-lite", Value: "gemini-lite"},
-					},
+					Type:        discordgo.ApplicationCommandOptionSubCommand,
+					Name:        "list",
+					Description: "利用可能なモデル一覧を表示",
 				},
 			},
 		},
@@ -157,21 +166,35 @@ func (b *Bot) registerCommands() error {
 			Description: "Skill/MCPの管理",
 			Options: []*discordgo.ApplicationCommandOption{
 				{
-					Name:        "action",
-					Description: "install, list, or remove",
-					Type:        discordgo.ApplicationCommandOptionString,
-					Required:    true,
-					Choices: []*discordgo.ApplicationCommandOptionChoice{
-						{Name: "install", Value: "install"},
-						{Name: "list", Value: "list"},
-						{Name: "remove", Value: "remove"},
+					Type:        discordgo.ApplicationCommandOptionSubCommand,
+					Name:        "install",
+					Description: "Skillをインストール",
+					Options: []*discordgo.ApplicationCommandOption{
+						{
+							Name:        "name",
+							Description: "Skill名",
+							Type:        discordgo.ApplicationCommandOptionString,
+							Required:    true,
+						},
 					},
 				},
 				{
-					Name:        "name",
-					Description: "Skill名",
-					Type:        discordgo.ApplicationCommandOptionString,
-					Required:    false,
+					Type:        discordgo.ApplicationCommandOptionSubCommand,
+					Name:        "list",
+					Description: "インストール済みSkillの一覧",
+				},
+				{
+					Type:        discordgo.ApplicationCommandOptionSubCommand,
+					Name:        "remove",
+					Description: "Skillを削除",
+					Options: []*discordgo.ApplicationCommandOption{
+						{
+							Name:        "name",
+							Description: "Skill名",
+							Type:        discordgo.ApplicationCommandOptionString,
+							Required:    true,
+						},
+					},
 				},
 			},
 		},
@@ -294,7 +317,7 @@ func (b *Bot) handleMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 	})
 
 	// 5. ユーザーごとのツールレジストリを作成
-	registry, err := tools.DefaultRegistry(b.workDir, m.Author.ID, b.convManager.SandboxQueue(), b.webSearchLimiter, b.webFetchLimiter, s)
+	registry, err := tools.DefaultRegistry(b.workDir, m.Author.ID, m.ChannelID, b.convManager.SandboxQueue(), b.webSearchLimiter, b.webFetchLimiter, s)
 	if err != nil {
 		log.Printf("Failed to create tool registry for user %s: %v", m.Author.ID, err)
 		s.ChannelMessageSend(m.ChannelID, "エラーが発生しました。しばらくしてから再試行してください。")
@@ -570,28 +593,23 @@ func (b *Bot) handleChannelCommand(s *discordgo.Session, i *discordgo.Interactio
 
 // handleModelCommand は/modelコマンドを処理する
 func (b *Bot) handleModelCommand(s *discordgo.Session, i *discordgo.InteractionCreate) {
-	options := i.ApplicationCommandData().Options
-	action := options[0].StringValue()
+	data := i.ApplicationCommandData()
+	sub := data.Options[0]
+	subName := sub.Name
 
 	var response string
-	switch action {
+	switch subName {
 	case "set":
-		if len(options) < 2 {
-			response = "モデル名を指定してください"
+		modelName := sub.Options[0].StringValue()
+		if err := b.store.SaveUserModel(i.Member.User.ID, modelName); err != nil {
+			response = fmt.Sprintf("モデルの保存に失敗しました: %v", err)
 		} else {
-			modelName := options[1].StringValue()
-			if err := b.store.SaveUserModel(i.Member.User.ID, modelName); err != nil {
-				response = fmt.Sprintf("モデルの保存に失敗しました: %v", err)
-			} else {
-				response = fmt.Sprintf("モデルを %s に設定しました", modelName)
-			}
-			// キャッシュを無効化して次回メッセージで新しいモデルを使う
-			b.mu.Lock()
-			delete(b.llmClients, i.Member.User.ID)
-			b.mu.Unlock()
+			response = fmt.Sprintf("モデルを %s に設定しました", modelName)
 		}
+		b.mu.Lock()
+		delete(b.llmClients, i.Member.User.ID)
+		b.mu.Unlock()
 	case "list":
-		// 利用可能なモデル一覧を表示
 		response = "利用可能なモデル:\n- gemma-4-26b-a4b-it\n- gemma-4-31b-it\n- gemini-lite"
 	}
 
@@ -605,51 +623,200 @@ func (b *Bot) handleModelCommand(s *discordgo.Session, i *discordgo.InteractionC
 
 // handleTrashCommand は/trashコマンドを処理する
 func (b *Bot) handleTrashCommand(s *discordgo.Session, i *discordgo.InteractionCreate) {
-	// TODO: ゴミ箱の中身を表示
+	userID := i.Member.User.ID
+	trashDir := filepath.Join(b.workDir, userID, ".trash")
+
+	entries, err := os.ReadDir(trashDir)
+	if err != nil || len(entries) == 0 {
+		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+			Type: discordgo.InteractionResponseChannelMessageWithSource,
+			Data: &discordgo.InteractionResponseData{
+				Content: "ゴミ箱は空です",
+			},
+		})
+		return
+	}
+
+	var bld strings.Builder
+	bld.WriteString("**ゴミ箱:**\n")
+	for _, e := range entries {
+		info, _ := e.Info()
+		size := info.Size()
+		modTime := info.ModTime().Format("01/02 15:04")
+		sizeStr := fmt.Sprintf("%d B", size)
+		if size > 1024 {
+			sizeStr = fmt.Sprintf("%.1f KB", float64(size)/1024)
+		}
+		bld.WriteString(fmt.Sprintf("- `%s` (%s, %s)\n", e.Name(), sizeStr, modTime))
+	}
+
 	s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseChannelMessageWithSource,
 		Data: &discordgo.InteractionResponseData{
-			Content: "ゴミ箱は空です",
+			Content: bld.String(),
 		},
 	})
 }
 
+// cronScheduler は定期的にcronジョブを確認して実行する
+func (b *Bot) cronScheduler(ctx context.Context) {
+	cronPath := filepath.Join(filepath.Dir(b.workDir), "config", "cron.json")
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			b.runDueJobs(ctx, cronPath)
+		}
+	}
+}
+
+// runDueJobs は実行すべきcronジョブを実行する
+func (b *Bot) runDueJobs(ctx context.Context, cronPath string) {
+	data, err := os.ReadFile(cronPath)
+	if err != nil {
+		return
+	}
+
+	var jobs []tools.CronJob
+	if err := json.Unmarshal(data, &jobs); err != nil {
+		log.Printf("Cron: failed to parse %s: %v", cronPath, err)
+		return
+	}
+
+	now := time.Now()
+	updated := false
+
+	for i, job := range jobs {
+		dur, err := time.ParseDuration(job.Interval)
+		if err != nil {
+			continue
+		}
+
+		lastRun := job.LastRunAt
+		if lastRun.IsZero() {
+			lastRun = job.CreatedAt
+		}
+		if lastRun.Add(dur).After(now) {
+			continue
+		}
+
+		// サンドボックスでコマンドを実行
+		sb := sandbox.New(b.workDir, job.UserID, b.convManager.SandboxQueue())
+		execCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		output, execErr := sb.Exec(execCtx, job.Command)
+		cancel()
+
+		// 結果をDiscordに送信
+		msg := fmt.Sprintf("**Cron実行:** `%s`\n", job.Command)
+		if execErr != nil {
+			msg += fmt.Sprintf("エラー: %v", execErr)
+		} else {
+			msg += fmt.Sprintf("```\n%s\n```", output)
+		}
+		if job.ChannelID != "" {
+			if _, err := b.session.ChannelMessageSend(job.ChannelID, msg); err != nil {
+				log.Printf("Cron: failed to send result to channel %s: %v", job.ChannelID, err)
+			}
+		}
+
+		// LastRunAtを更新
+		jobs[i].LastRunAt = now
+		updated = true
+	}
+
+	if updated {
+		b.saveCronJobs(cronPath, jobs)
+	}
+}
+
+// saveCronJobs はcron.jsonをアトミックに保存する
+func (b *Bot) saveCronJobs(cronPath string, jobs []tools.CronJob) {
+	tmpPath := cronPath + ".tmp"
+	data, err := json.MarshalIndent(jobs, "", "  ")
+	if err != nil {
+		log.Printf("Cron: failed to marshal jobs: %v", err)
+		return
+	}
+	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
+		log.Printf("Cron: failed to write temp file: %v", err)
+		return
+	}
+	if err := os.Rename(tmpPath, cronPath); err != nil {
+		os.Remove(tmpPath)
+		log.Printf("Cron: failed to rename: %v", err)
+	}
+}
+
 // handleTrashclearCommand は/trashclearコマンドを処理する
 func (b *Bot) handleTrashclearCommand(s *discordgo.Session, i *discordgo.InteractionCreate) {
-	// TODO: ゴミ箱を完全削除
+	userID := i.Member.User.ID
+	trashDir := filepath.Join(b.workDir, userID, ".trash")
+
+	entries, err := os.ReadDir(trashDir)
+	if err != nil || len(entries) == 0 {
+		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+			Type: discordgo.InteractionResponseChannelMessageWithSource,
+			Data: &discordgo.InteractionResponseData{
+				Content: "ゴミ箱は空です",
+			},
+		})
+		return
+	}
+
+	count := 0
+	for _, e := range entries {
+		os.RemoveAll(filepath.Join(trashDir, e.Name()))
+		count++
+	}
+
 	s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseChannelMessageWithSource,
 		Data: &discordgo.InteractionResponseData{
-			Content: "ゴミ箱を完全に削除しました",
+			Content: fmt.Sprintf("ゴミ箱を空にしました（%dファイル削除）", count),
 		},
 	})
 }
 
 // handleSkillCommand は/skillコマンドを処理する
 func (b *Bot) handleSkillCommand(s *discordgo.Session, i *discordgo.InteractionCreate) {
-	options := i.ApplicationCommandData().Options
-	action := options[0].StringValue()
+	data := i.ApplicationCommandData()
+	sub := data.Options[0]
+	subName := sub.Name
+	userID := i.Member.User.ID
 
 	var response string
-	switch action {
+	switch subName {
 	case "install":
-		if len(options) < 2 {
-			response = "Skill名を指定してください"
+		skillName := sub.Options[0].StringValue()
+		if err := b.store.SaveUserSkill(userID, skillName); err != nil {
+			response = fmt.Sprintf("Skillのインストールに失敗しました: %v", err)
 		} else {
-			skillName := options[1].StringValue()
-			// TODO: Skillのインストール
-			response = fmt.Sprintf("Skill %s をインストールしました", skillName)
+			response = fmt.Sprintf("Skill `%s` をインストールしました", skillName)
 		}
 	case "list":
-		// TODO: インストール済みSkillの一覧を表示
-		response = "インストール済みSkillはありません"
-	case "remove":
-		if len(options) < 2 {
-			response = "Skill名を指定してください"
+		skills, err := b.store.LoadUserSkills(userID)
+		if err != nil {
+			response = fmt.Sprintf("Skill一覧の取得に失敗しました: %v", err)
+		} else if len(skills) == 0 {
+			response = "インストール済みSkillはありません"
 		} else {
-			skillName := options[1].StringValue()
-			// TODO: Skillの削除
-			response = fmt.Sprintf("Skill %s を削除しました", skillName)
+			var bld strings.Builder
+			bld.WriteString("**インストール済みSkill:**\n")
+			for _, sk := range skills {
+				bld.WriteString(fmt.Sprintf("- `%s`\n", sk))
+			}
+			response = bld.String()
+		}
+	case "remove":
+		skillName := sub.Options[0].StringValue()
+		if err := b.store.RemoveUserSkill(userID, skillName); err != nil {
+			response = fmt.Sprintf("Skillの削除に失敗しました: %v", err)
+		} else {
+			response = fmt.Sprintf("Skill `%s` を削除しました", skillName)
 		}
 	}
 

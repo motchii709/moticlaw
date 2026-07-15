@@ -745,7 +745,7 @@ func testScenarioCronPersistence() []result {
 
 	return []result{
 		runTest("S7a: register cron job and verify file persistence", 10*time.Second, func() error {
-			tool := tools.NewCronRegisterTool(testUserID)
+			tool := tools.NewCronRegisterTool(testUserID, "")
 			result, err := tool.Execute(context.Background(), map[string]interface{}{
 				"interval": "10m",
 				"command":  "echo persistence-test",
@@ -833,7 +833,7 @@ func testScenarioCronPersistence() []result {
 		}),
 		runTest("S7c: minimum interval enforcement after restart", 5*time.Second, func() error {
 			// Fresh instance should still enforce minimum interval
-			tool := tools.NewCronRegisterTool(testUserID)
+			tool := tools.NewCronRegisterTool(testUserID, "")
 			_, err := tool.Execute(context.Background(), map[string]interface{}{
 				"interval": "1m",
 				"command":  "echo too-frequent",

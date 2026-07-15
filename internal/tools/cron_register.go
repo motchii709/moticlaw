@@ -11,13 +11,15 @@ import (
 
 // CronRegisterTool はcronジョブを登録するツール
 type CronRegisterTool struct {
-	userID string
+	userID    string
+	channelID string
 }
 
 // NewCronRegisterTool は新しいCronRegisterToolを作成する
-func NewCronRegisterTool(userID string) *CronRegisterTool {
+func NewCronRegisterTool(userID, channelID string) *CronRegisterTool {
 	return &CronRegisterTool{
-		userID: userID,
+		userID:    userID,
+		channelID: channelID,
 	}
 }
 
@@ -39,6 +41,7 @@ type CronJob struct {
 	Interval  string    `json:"interval"`
 	Command   string    `json:"command"`
 	CreatedAt time.Time `json:"created_at"`
+	LastRunAt time.Time `json:"last_run_at"`
 }
 
 // Execute はcronジョブを登録する
@@ -68,6 +71,7 @@ func (t *CronRegisterTool) Execute(ctx context.Context, params map[string]interf
 	job := CronJob{
 		ID:        fmt.Sprintf("cron_%d", time.Now().UnixNano()),
 		UserID:    t.userID,
+		ChannelID: t.channelID,
 		Interval:  interval,
 		Command:   command,
 		CreatedAt: time.Now(),

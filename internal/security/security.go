@@ -2,6 +2,8 @@ package security
 
 import (
 	"net"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -150,20 +152,28 @@ func NewPathValidator(allowedBase string) *PathValidator {
 	}
 }
 
-// IsValidPath はパスが有効か確認する
+// IsValidPath はパスが許可されたベースパス内にあるか確認する
 func (v *PathValidator) IsValidPath(path string) bool {
-	// パストラバーサル攻撃の防止
 	if strings.Contains(path, "..") {
 		return false
 	}
-
-	// 絶対パスの拒否
 	if strings.HasPrefix(path, "/") {
 		return false
 	}
 
-	// 許可されたベースパス内か確認
-	// TODO: 実際のパス解決と確認
+	absAllowed, err := filepath.Abs(v.allowedBase)
+	if err != nil {
+		return false
+	}
 
-	return true
+	cleanPath := filepath.Clean(path)
+
+	fullPath := filepath.Join(absAllowed, cleanPath)
+
+	resolved, err := filepath.EvalSymlinks(fullPath)
+	if err != nil {
+		resolved, _ = filepath.Abs(fullPath)
+	}
+
+	return strings.HasPrefix(resolved, absAllowed+string(os.PathSeparator)) || resolved == absAllowed
 }

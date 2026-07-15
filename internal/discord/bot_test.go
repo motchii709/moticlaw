@@ -24,7 +24,7 @@ func TestDefaultRegistry_ValidUserID_Numeric(t *testing.T) {
 	defer limiter1.Stop()
 	defer limiter2.Stop()
 
-	registry, err := tools.DefaultRegistry("/tmp/test", "123456789", queue, limiter1, limiter2, nil)
+	registry, err := tools.DefaultRegistry("/tmp/test", "123456789", "", queue, limiter1, limiter2, nil)
 	if err != nil {
 		t.Fatalf("DefaultRegistry with numeric userID should succeed, got error: %v", err)
 	}
@@ -41,7 +41,7 @@ func TestDefaultRegistry_ValidUserID_Underscore(t *testing.T) {
 	defer limiter1.Stop()
 	defer limiter2.Stop()
 
-	registry, err := tools.DefaultRegistry("/tmp/test", "user_123", queue, limiter1, limiter2, nil)
+	registry, err := tools.DefaultRegistry("/tmp/test", "user_123", "", queue, limiter1, limiter2, nil)
 	if err != nil {
 		t.Fatalf("DefaultRegistry with underscore userID should succeed, got error: %v", err)
 	}
@@ -58,7 +58,7 @@ func TestDefaultRegistry_ValidUserID_Hyphen(t *testing.T) {
 	defer limiter1.Stop()
 	defer limiter2.Stop()
 
-	registry, err := tools.DefaultRegistry("/tmp/test", "user-123", queue, limiter1, limiter2, nil)
+	registry, err := tools.DefaultRegistry("/tmp/test", "user-123", "", queue, limiter1, limiter2, nil)
 	if err != nil {
 		t.Fatalf("DefaultRegistry with hyphen userID should succeed, got error: %v", err)
 	}
@@ -75,7 +75,7 @@ func TestDefaultRegistry_RejectsPathTraversal(t *testing.T) {
 	defer limiter1.Stop()
 	defer limiter2.Stop()
 
-	_, err := tools.DefaultRegistry("/tmp/test", "../etc", queue, limiter1, limiter2, nil)
+	_, err := tools.DefaultRegistry("/tmp/test", "../etc", "", queue, limiter1, limiter2, nil)
 	if err == nil {
 		t.Fatal("DefaultRegistry with path traversal userID should return error")
 	}
@@ -89,7 +89,7 @@ func TestDefaultRegistry_RejectsSlash(t *testing.T) {
 	defer limiter1.Stop()
 	defer limiter2.Stop()
 
-	_, err := tools.DefaultRegistry("/tmp/test", "user/123", queue, limiter1, limiter2, nil)
+	_, err := tools.DefaultRegistry("/tmp/test", "user/123", "", queue, limiter1, limiter2, nil)
 	if err == nil {
 		t.Fatal("DefaultRegistry with slash userID should return error")
 	}
@@ -103,7 +103,7 @@ func TestDefaultRegistry_RejectsEmpty(t *testing.T) {
 	defer limiter1.Stop()
 	defer limiter2.Stop()
 
-	_, err := tools.DefaultRegistry("/tmp/test", "", queue, limiter1, limiter2, nil)
+	_, err := tools.DefaultRegistry("/tmp/test", "", "", queue, limiter1, limiter2, nil)
 	if err == nil {
 		t.Fatal("DefaultRegistry with empty userID should return error")
 	}
@@ -117,7 +117,7 @@ func TestDefaultRegistry_RejectsSpace(t *testing.T) {
 	defer limiter1.Stop()
 	defer limiter2.Stop()
 
-	_, err := tools.DefaultRegistry("/tmp/test", "user 123", queue, limiter1, limiter2, nil)
+	_, err := tools.DefaultRegistry("/tmp/test", "user 123", "", queue, limiter1, limiter2, nil)
 	if err == nil {
 		t.Fatal("DefaultRegistry with space in userID should return error")
 	}
@@ -131,7 +131,7 @@ func TestDefaultRegistry_RejectsDot(t *testing.T) {
 	defer limiter1.Stop()
 	defer limiter2.Stop()
 
-	_, err := tools.DefaultRegistry("/tmp/test", "user.123", queue, limiter1, limiter2, nil)
+	_, err := tools.DefaultRegistry("/tmp/test", "user.123", "", queue, limiter1, limiter2, nil)
 	if err == nil {
 		t.Fatal("DefaultRegistry with dot in userID should return error")
 	}
@@ -149,7 +149,7 @@ func TestDefaultRegistry_Has14Tools(t *testing.T) {
 	defer limiter1.Stop()
 	defer limiter2.Stop()
 
-	registry, err := tools.DefaultRegistry("/tmp/test", "123456789", queue, limiter1, limiter2, nil)
+	registry, err := tools.DefaultRegistry("/tmp/test", "123456789", "", queue, limiter1, limiter2, nil)
 	if err != nil {
 		t.Fatalf("DefaultRegistry should succeed, got error: %v", err)
 	}
@@ -358,12 +358,12 @@ func TestDefaultRegistry_UserIDIsolation(t *testing.T) {
 	defer limiter1.Stop()
 	defer limiter2.Stop()
 
-	registry1, err := tools.DefaultRegistry("/tmp/workdir", "user_A", queue, limiter1, limiter2, nil)
+	registry1, err := tools.DefaultRegistry("/tmp/workdir", "user_A", "", queue, limiter1, limiter2, nil)
 	if err != nil {
 		t.Fatalf("DefaultRegistry for user_A failed: %v", err)
 	}
 
-	registry2, err := tools.DefaultRegistry("/tmp/workdir", "user_B", queue, limiter1, limiter2, nil)
+	registry2, err := tools.DefaultRegistry("/tmp/workdir", "user_B", "", queue, limiter1, limiter2, nil)
 	if err != nil {
 		t.Fatalf("DefaultRegistry for user_B failed: %v", err)
 	}

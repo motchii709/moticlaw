@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/bwmarrin/discordgo"
@@ -271,7 +272,7 @@ func (t *DiscordFetchTool) getGuildInfo(params map[string]interface{}) (interfac
 	}, nil
 }
 
-// searchMessages はメッセージを検索する
+// searchMessages はチャンネルのメッセージを検索する
 func (t *DiscordFetchTool) searchMessages(params map[string]interface{}) (interface{}, error) {
 	channelID, ok := params["channel_id"].(string)
 	if !ok {
@@ -283,14 +284,40 @@ func (t *DiscordFetchTool) searchMessages(params map[string]interface{}) (interf
 		return nil, fmt.Errorf("query parameter is required")
 	}
 
-	// TODO: 実際のメッセージ検索APIの実装
-	// discordgoにはメッセージ検索APIが含まれていない可能性がある
+	if !t.canUserAccessChannel(t.userID, channelID) {
+		return nil, fmt.Errorf("access denied: cannot access channel %s", channelID)
+	}
+
+	limit := 100
+	if l, ok := params["limit"].(float64); ok {
+		if li := int(l); li > 0 && li <= 100 {
+			limit = li
+		}
+	}
+
+	msgs, err := t.session.ChannelMessages(channelID, limit, "", "", "")
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch messages: %w", err)
+	}
+
+	var results []map[string]interface{}
+	for _, m := range msgs {
+		if !strings.Contains(m.Content, query) {
+			continue
+		}
+		results = append(results, map[string]interface{}{
+			"id":        m.ID,
+			"author":    m.Author.Username,
+			"author_id": m.Author.ID,
+			"content":   m.Content,
+			"timestamp": m.Timestamp,
+		})
+	}
+
 	return map[string]interface{}{
-		"results": []map[string]interface{}{
-			{
-				"query":   query,
-				"channel": channelID,
-			},
-		},
+		"query":   query,
+		"channel": channelID,
+		"results": results,
+		"total":   len(results),
 	}, nil
 }

@@ -160,6 +160,95 @@ func (s *Store) LoadUserModel(userID string) (string, error) {
 	return config.Model, nil
 }
 
+// UserSkillConfig is stored at data/config/users/<user_id>/skills.json
+type UserSkillConfig struct {
+	Skills []string `json:"skills"`
+}
+
+// SaveUserSkill はユーザーのSkillを保存する
+func (s *Store) SaveUserSkill(userID, skillName string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	skills, err := s.loadUserSkillsUnsafe(userID)
+	if err != nil {
+		return err
+	}
+
+	for _, sk := range skills {
+		if sk == skillName {
+			return nil
+		}
+	}
+
+	skills = append(skills, skillName)
+	return s.saveUserSkillsUnsafe(userID, skills)
+}
+
+// LoadUserSkills はユーザーのインストール済みSkill一覧を読み込む
+func (s *Store) LoadUserSkills(userID string) ([]string, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	return s.loadUserSkillsUnsafe(userID)
+}
+
+// RemoveUserSkill はユーザーのSkillを削除する
+func (s *Store) RemoveUserSkill(userID, skillName string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	skills, err := s.loadUserSkillsUnsafe(userID)
+	if err != nil {
+		return err
+	}
+
+	for i, sk := range skills {
+		if sk == skillName {
+			skills = append(skills[:i], skills[i+1:]...)
+			return s.saveUserSkillsUnsafe(userID, skills)
+		}
+	}
+
+	return fmt.Errorf("skill not found: %s", skillName)
+}
+
+func (s *Store) loadUserSkillsUnsafe(userID string) ([]string, error) {
+	path := filepath.Join(s.dataDir, "config", "users", userID, "skills.json")
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return []string{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	var config UserSkillConfig
+	if err := json.Unmarshal(data, &config); err != nil {
+		return nil, err
+	}
+	return config.Skills, nil
+}
+
+func (s *Store) saveUserSkillsUnsafe(userID string, skills []string) error {
+	path := filepath.Join(s.dataDir, "config", "users", userID, "skills.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return err
+	}
+
+	config := UserSkillConfig{Skills: skills}
+	data, err := json.MarshalIndent(config, "", "  ")
+	if err != nil {
+		return err
+	}
+
+	tmpPath := path + ".tmp"
+	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, path)
+}
+
 // HistoryEntry は会話履歴の1メッセージ（永続化用、role+contentのみ）
 type HistoryEntry struct {
 	Role    string `json:"role"`

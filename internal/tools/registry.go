@@ -49,7 +49,7 @@ func (r *Registry) List() []string {
 // DefaultRegistry はデフォルトのツールレジストリを作成する
 // searchLimiter と fetchLimiter は共有のレート制限インスタンス（Botレベルで管理）
 // session は discord_fetch ツールの権限チェックに使用する。nil の場合は全権限チェックが失敗する。
-func DefaultRegistry(workDir, userID string, queue chan struct{}, searchLimiter, fetchLimiter *security.RateLimiter, session *discordgo.Session) (*Registry, error) {
+func DefaultRegistry(workDir, userID, channelID string, queue chan struct{}, searchLimiter, fetchLimiter *security.RateLimiter, session *discordgo.Session) (*Registry, error) {
 	if err := validateUserID(userID); err != nil {
 		return nil, err
 	}
@@ -65,7 +65,7 @@ func DefaultRegistry(workDir, userID string, queue chan struct{}, searchLimiter,
 	r.Register(NewWebFetchTool(fetchLimiter))
 	r.Register(NewMemoryReadTool(userID))
 	r.Register(NewMemoryWriteTool(userID))
-	r.Register(NewCronRegisterTool(userID))
+	r.Register(NewCronRegisterTool(userID, channelID))
 	r.Register(NewDiscordFetchTool(userID, session))
 	r.Register(NewGithubFetchTool())
 	r.Register(NewModrinthFetchTool())
@@ -222,7 +222,11 @@ func getParameters(toolName string) map[string]interface{} {
 				},
 				"query": map[string]interface{}{
 					"type":        "string",
-					"description": "検索クエリ",
+					"description": "検索クエリ（search_messagesで必須）",
+				},
+				"limit": map[string]interface{}{
+					"type":        "number",
+					"description": "取得するメッセージ数（デフォルト100, 最大100）",
 				},
 			},
 			"required": []string{"action"},

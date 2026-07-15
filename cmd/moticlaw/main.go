@@ -1,11 +1,13 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"log"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"github.com/moti/moticlaw/internal/discord"
@@ -18,7 +20,7 @@ func main() {
 
 	// 環境変数の読み込み（.envファイルから）
 	if err := loadEnv(); err != nil {
-		log.Printf("Warning: .env file not found or invalid: %v", err)
+		log.Printf("Warning: .env: %v (env vars must be already set)", err)
 	}
 
 	// ストアの初期化
@@ -54,9 +56,29 @@ func main() {
 }
 
 // loadEnv は.envファイルから環境変数を読み込む
-// 実際の実装ではenvconfigやgodotenvを使う
 func loadEnv() error {
-	// TODO: .envファイルの読み込み実装
-	// 現在はプレースホルダー
-	return nil
+	f, err := os.Open(".env")
+	if err != nil {
+		return fmt.Errorf("failed to open .env: %w", err)
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		k, v, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		key := strings.TrimSpace(k)
+		val := strings.TrimSpace(v)
+		if os.Getenv(key) != "" {
+			continue
+		}
+		os.Setenv(key, val)
+	}
+	return scanner.Err()
 }

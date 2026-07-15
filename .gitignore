@@ -1,0 +1,34 @@
+# moticlaw .gitignore
+
+# ランタイムデータ
+data/
+
+# ビルド成果物
+bin/
+
+# 環境変数
+.env
+
+# Go
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# テスト
+*.test
+
+# 出力
+*.out
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db

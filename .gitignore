@@ -1,13 +1,14 @@
 # moticlaw .gitignore
 
-# ランタイムデータ
+# Secrets
+.env
+config.json
+
+# Runtime data
 data/
 
-# ビルド成果物
+# Build artifacts
 bin/
-
-# 環境変数
-.env
 
 # Go
 *.exe
@@ -15,12 +16,16 @@ bin/
 *.dll
 *.so
 *.dylib
-
-# テスト
 *.test
-
-# 出力
 *.out
+
+# Python (legacy)
+__pycache__/
+*.pyc
+.pytest_cache/
+venv/
+env/
+.venv/
 
 # IDE
 .vscode/

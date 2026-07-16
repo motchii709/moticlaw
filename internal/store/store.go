@@ -160,6 +160,55 @@ func (s *Store) LoadUserModel(userID string) (string, error) {
 	return config.Model, nil
 }
 
+// UserThinkingShowConfig is stored at data/config/users/<user_id>/thinking.json
+type UserThinkingShowConfig struct {
+	Enabled bool `json:"enabled"`
+}
+
+// LoadThinkingShow はユーザーの思考表示設定を読み込む
+func (s *Store) LoadThinkingShow(userID string) (bool, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	path := filepath.Join(s.dataDir, "config", "users", userID, "thinking.json")
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+
+	var config UserThinkingShowConfig
+	if err := json.Unmarshal(data, &config); err != nil {
+		return false, err
+	}
+	return config.Enabled, nil
+}
+
+// SaveThinkingShow はユーザーの思考表示設定を保存する
+func (s *Store) SaveThinkingShow(userID string, enabled bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	path := filepath.Join(s.dataDir, "config", "users", userID, "thinking.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return err
+	}
+
+	config := UserThinkingShowConfig{Enabled: enabled}
+	data, err := json.MarshalIndent(config, "", "  ")
+	if err != nil {
+		return err
+	}
+
+	tmpPath := path + ".tmp"
+	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, path)
+}
+
 // UserSkillConfig is stored at data/config/users/<user_id>/skills.json
 type UserSkillConfig struct {
 	Skills []string `json:"skills"`

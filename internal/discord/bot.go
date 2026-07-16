@@ -162,6 +162,18 @@ func (b *Bot) registerCommands() error {
 			Description: "ゴミ箱を完全削除",
 		},
 		{
+			Name:        "thinkingshow",
+			Description: "回答の前に思考内容を表示するかどうかを設定",
+			Options: []*discordgo.ApplicationCommandOption{
+				{
+					Name:        "enabled",
+					Description: "表示する/しない",
+					Type:        discordgo.ApplicationCommandOptionBoolean,
+					Required:    true,
+				},
+			},
+		},
+		{
 			Name:        "stop",
 			Description: "現在の会話をリセットして応答を停止します",
 		},
@@ -446,33 +458,22 @@ func (b *Bot) handleMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 		finalResponse = "\uff08\u30c4\u30fc\u30eb\u5b9f\u884c\u56de\u6570\u306e\u4e0a\u9650\u306b\u9054\u3057\u307e\u3057\u305f\uff09"
 	}
 
-	// ステータスメッセージを削除（応答送信をもって完了とする）
+	// ステータスメッセージを削除
 	if statusMsg != nil {
 		s.ChannelMessageDelete(m.ChannelID, statusMsg.ID)
 	}
 
-	// 10. AI応答をセッションに追加
+	// 11. AI応答をセッションに追加
 	session.AppendMessage(llm.Message{
 		Role:    "assistant",
 		Content: finalResponse,
 	})
 
-	// 11. Discord向けフォーマットを適用
+	// 12. Discord向けフォーマットを適用
 	formatted := formatForDiscord(finalResponse)
 
-	// 12. 応答を送信（2000文字超の場合は分割）
-	if len(formatted) > 2000 {
-		chunks := splitMessage(formatted, 2000)
-		for _, chunk := range chunks {
-			if _, err := s.ChannelMessageSend(m.ChannelID, chunk); err != nil {
-				log.Printf("Failed to send response chunk: %v", err)
-			}
-		}
-	} else {
-		if _, err := s.ChannelMessageSend(m.ChannelID, formatted); err != nil {
-			log.Printf("Failed to send response: %v", err)
-		}
-	}
+	// 13. ストリーミング風に送信
+	b.sendStreaming(ctx, s, m.ChannelID, formatted)
 }
 
 // getLLMClient はユーザーのLLMクライアントを取得する
@@ -549,6 +550,64 @@ func splitMessage(content string, maxLen int) []string {
 	return chunks
 }
 
+// sendStreaming はメッセージをストリーミング風に送信する
+func (b *Bot) sendStreaming(ctx context.Context, s *discordgo.Session, channelID, formatted string) {
+	// 2000字超は分割送信（ストリーミング不可）
+	if len(formatted) > 2000 {
+		chunks := splitMessage(formatted, 2000)
+		for _, chunk := range chunks {
+			if _, err := s.ChannelMessageSend(channelID, chunk); err != nil {
+				log.Printf("Failed to send chunk: %v", err)
+			}
+		}
+		return
+	}
+
+	// 文単位で分割（改行、句点、改行コード）
+	var parts []string
+	for _, line := range strings.Split(formatted, "\n") {
+		if line == "" {
+			parts = append(parts, "\n")
+			continue
+		}
+		// 句点または改行で分割しない。1行をそのまま1パートとする
+		parts = append(parts, line)
+	}
+	if len(parts) == 0 {
+		parts = []string{""}
+	}
+
+	// 最初のパートを送信
+	sent, err := s.ChannelMessageSend(channelID, parts[0])
+	if err != nil {
+		log.Printf("Failed to send first message: %v", err)
+		return
+	}
+
+	// 残りのパートを逐次編集
+	for i := 1; i < len(parts); i++ {
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(200 * time.Millisecond):
+		}
+
+		content := parts[0]
+		for j := 1; j <= i; j++ {
+			if parts[j] == "\n" {
+				content += "\n"
+			} else {
+				content += "\n" + parts[j]
+			}
+		}
+
+		if _, err := s.ChannelMessageEdit(channelID, sent.ID, content); err != nil {
+			// レート制限などで編集に失敗したらそこで止める
+			return
+		}
+	}
+}
+
 // onInteractionCreate はインタラクション（スラッシュコマンド）のハンドラ
 func (b *Bot) onInteractionCreate(s *discordgo.Session, i *discordgo.InteractionCreate) {
 	// 権限チェック
@@ -574,6 +633,8 @@ func (b *Bot) onInteractionCreate(s *discordgo.Session, i *discordgo.Interaction
 		b.handleTrashclearCommand(s, i)
 	case "stop":
 		b.handleStopCommand(s, i)
+	case "thinkingshow":
+		b.handleThinkingShowCommand(s, i)
 	case "skill":
 		b.handleSkillCommand(s, i)
 	}
@@ -831,6 +892,33 @@ func (b *Bot) handleStopCommand(s *discordgo.Session, i *discordgo.InteractionCr
 		Type: discordgo.InteractionResponseChannelMessageWithSource,
 		Data: &discordgo.InteractionResponseData{
 			Content: "会話をリセットしました。また話しかけてください。",
+		},
+	})
+}
+
+// handleThinkingShowCommand は/thinkingshowコマンドを処理する
+func (b *Bot) handleThinkingShowCommand(s *discordgo.Session, i *discordgo.InteractionCreate) {
+	enabled := i.ApplicationCommandData().Options[0].BoolValue()
+	userID := i.Member.User.ID
+
+	if err := b.store.SaveThinkingShow(userID, enabled); err != nil {
+		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+			Type: discordgo.InteractionResponseChannelMessageWithSource,
+			Data: &discordgo.InteractionResponseData{
+				Content: fmt.Sprintf("設定の保存に失敗しました: %v", err),
+			},
+		})
+		return
+	}
+
+	status := "オフ"
+	if enabled {
+		status = "オン"
+	}
+	s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionResponseChannelMessageWithSource,
+		Data: &discordgo.InteractionResponseData{
+			Content: fmt.Sprintf("思考内容の表示を %s にしました", status),
 		},
 	})
 }

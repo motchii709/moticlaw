@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -9,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"time"
 )
@@ -89,7 +91,16 @@ type Tool struct {
 // Response はLLMからのレスポンス
 type Response struct {
 	Content   string
+	Thinking  string // chain-of-thought thinking text
 	ToolCalls []ToolCall
+}
+
+// StreamChunk はストリーミング応答の1チャンク
+type StreamChunk struct {
+	Text      string
+	Thinking  string
+	ToolCalls []ToolCall
+	Done      bool
 }
 
 // ToolCall はモデルからのツール呼び出し
@@ -192,6 +203,99 @@ func (c *Client) Generate(ctx context.Context, req *Request) (*Response, error) 
 	}
 
 	return nil, err
+}
+
+// GenerateStream はストリーミングで応答を生成する
+func (c *Client) GenerateStream(ctx context.Context, req *Request) (<-chan StreamChunk, error) {
+	ch := make(chan StreamChunk, 64)
+	go c.generateStream(ctx, c.model, req, ch)
+	return ch, nil
+}
+
+// generateStream はストリーミングAPIを呼び出す
+func (c *Client) generateStream(ctx context.Context, model Model, req *Request, ch chan<- StreamChunk) {
+	defer close(ch)
+
+	geminiReq := c.buildGeminiRequest(req)
+
+	body, err := json.Marshal(geminiReq)
+	if err != nil {
+		ch <- StreamChunk{Done: true}
+		return
+	}
+
+	url := fmt.Sprintf(
+		"https://generativelanguage.googleapis.com/v1beta/models/%s:streamGenerateContent?alt=sse&key=%s",
+		model,
+		c.apiKey,
+	)
+
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		ch <- StreamChunk{Done: true}
+		return
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.httpClient.Do(httpReq)
+	if err != nil {
+		ch <- StreamChunk{Done: true}
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		ch <- StreamChunk{Done: true}
+		return
+	}
+
+	// SSE形式をパース: "data: {...}\n\n"
+	br := bufio.NewReader(resp.Body)
+	for {
+		line, err := br.ReadString('\n')
+		if err != nil {
+			break
+		}
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+		data := strings.TrimPrefix(line, "data: ")
+		if data == "" {
+			continue
+		}
+
+		var sseResp geminiResponse
+		if err := json.Unmarshal([]byte(data), &sseResp); err != nil {
+			continue
+		}
+		chunk := c.convertStreamChunk(&sseResp)
+		ch <- chunk
+	}
+}
+
+// convertStreamChunk はストリーミングレスポンスの1チャンクを変換する
+func (c *Client) convertStreamChunk(geminiResp *geminiResponse) StreamChunk {
+	chunk := StreamChunk{}
+	if len(geminiResp.Candidates) == 0 {
+		return chunk
+	}
+
+	candidate := geminiResp.Candidates[0]
+	for _, part := range candidate.Content.Parts {
+		if part.Text != "" {
+			chunk.Text = part.Text
+		}
+		if part.FunctionCall != nil {
+			chunk.ToolCalls = append(chunk.ToolCalls, ToolCall{
+				ID:        generateToolCallID(),
+				Name:      part.FunctionCall.Name,
+				Arguments: part.FunctionCall.Args,
+			})
+		}
+	}
+
+	return chunk
 }
 
 // generateWithModel は指定モデルで応答を生成する
@@ -341,9 +445,10 @@ func (c *Client) convertResponse(geminiResp *geminiResponse) *Response {
 	resp := &Response{}
 
 	// 全パートを走査してテキストと関数呼び出しを抽出
+	var textParts []string
 	for _, part := range candidate.Content.Parts {
 		if part.Text != "" {
-			resp.Content = part.Text
+			textParts = append(textParts, part.Text)
 		}
 		if part.FunctionCall != nil {
 			resp.ToolCalls = append(resp.ToolCalls, ToolCall{
@@ -351,6 +456,21 @@ func (c *Client) convertResponse(geminiResp *geminiResponse) *Response {
 				Name:      part.FunctionCall.Name,
 				Arguments: part.FunctionCall.Args,
 			})
+		}
+	}
+
+	// 最後のテキストパート → Content、それ以前 → Thinking
+	if len(textParts) > 0 {
+		resp.Content = textParts[len(textParts)-1]
+		if len(textParts) > 1 {
+			var b strings.Builder
+			for i := 0; i < len(textParts)-1; i++ {
+				if i > 0 {
+					b.WriteString("\n")
+				}
+				b.WriteString(textParts[i])
+			}
+			resp.Thinking = b.String()
 		}
 	}
 

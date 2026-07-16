@@ -162,6 +162,10 @@ func (b *Bot) registerCommands() error {
 			Description: "ゴミ箱を完全削除",
 		},
 		{
+			Name:        "stop",
+			Description: "現在の会話をリセットして応答を停止します",
+		},
+		{
 			Name:        "skill",
 			Description: "Skill/MCPの管理",
 			Options: []*discordgo.ApplicationCommandOption{
@@ -568,6 +572,8 @@ func (b *Bot) onInteractionCreate(s *discordgo.Session, i *discordgo.Interaction
 		b.handleTrashCommand(s, i)
 	case "trashclear":
 		b.handleTrashclearCommand(s, i)
+	case "stop":
+		b.handleStopCommand(s, i)
 	case "skill":
 		b.handleSkillCommand(s, i)
 	}
@@ -807,6 +813,24 @@ func (b *Bot) handleTrashclearCommand(s *discordgo.Session, i *discordgo.Interac
 		Type: discordgo.InteractionResponseChannelMessageWithSource,
 		Data: &discordgo.InteractionResponseData{
 			Content: fmt.Sprintf("ゴミ箱を空にしました（%dファイル削除）", count),
+		},
+	})
+}
+
+// handleStopCommand は/stopコマンドを処理する
+func (b *Bot) handleStopCommand(s *discordgo.Session, i *discordgo.InteractionCreate) {
+	userID := i.Member.User.ID
+
+	b.convManager.EvictSession(userID)
+
+	b.mu.Lock()
+	delete(b.llmClients, userID)
+	b.mu.Unlock()
+
+	s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionResponseChannelMessageWithSource,
+		Data: &discordgo.InteractionResponseData{
+			Content: "会話をリセットしました。また話しかけてください。",
 		},
 	})
 }

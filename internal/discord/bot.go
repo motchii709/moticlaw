@@ -289,21 +289,41 @@ DiscordのメッセージボックスはMarkdownのサブセットしかサポ�
 - 長いリストは分割送信（Discordの2000文字制限）
 - ツールの戻り値を見せる場合もコードブロックを使う`
 
+const customEmojiThinking = "<a:thinking_spin:1527104850632904725>"
+
 // handleMessage はメッセージを処理する（ツール実行ループ付き）
 func (b *Bot) handleMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
+	// ステータスメッセージを即座に送信
+	statusMsg, _ := s.ChannelMessageSend(m.ChannelID, "\U0001f440")
+
+	// ステータス編集を安全に行うヘルパー
+	editStatus := func(content string) {
+		if statusMsg != nil {
+			if _, err := s.ChannelMessageEdit(m.ChannelID, statusMsg.ID, content); err != nil {
+				log.Printf("Failed to edit status message: %v", err)
+			}
+		}
+	}
+
+	// エラー報告ヘルパー（ステータス編集 + ログ + return前提）
+	sendError := func(logMsg string) {
+		log.Println(logMsg)
+		if statusMsg != nil {
+			s.ChannelMessageEdit(m.ChannelID, statusMsg.ID, "\u274c\n```\n"+logMsg+"\n```")
+		}
+	}
+
 	// 1. ユーザーのLLMクライアントを取得
 	client, err := b.getLLMClient(m.Author.ID)
 	if err != nil {
-		log.Printf("Failed to get LLM client for user %s: %v", m.Author.ID, err)
-		s.ChannelMessageSend(m.ChannelID, "エラーが発生しました。しばらくしてから再試行してください。")
+		sendError(fmt.Sprintf("Failed to get LLM client for user %s: %v", m.Author.ID, err))
 		return
 	}
 
 	// 2. 会話セッションを取得
 	session, err := b.convManager.GetSession(m.Author.ID)
 	if err != nil {
-		log.Printf("Failed to get session for user %s: %v", m.Author.ID, err)
-		s.ChannelMessageSend(m.ChannelID, "エラーが発生しました。しばらくしてから再試行してください。")
+		sendError(fmt.Sprintf("Failed to get session for user %s: %v", m.Author.ID, err))
 		return
 	}
 
@@ -319,8 +339,7 @@ func (b *Bot) handleMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 	// 5. ユーザーごとのツールレジストリを作成
 	registry, err := tools.DefaultRegistry(b.workDir, m.Author.ID, m.ChannelID, b.convManager.SandboxQueue(), b.webSearchLimiter, b.webFetchLimiter, s)
 	if err != nil {
-		log.Printf("Failed to create tool registry for user %s: %v", m.Author.ID, err)
-		s.ChannelMessageSend(m.ChannelID, "エラーが発生しました。しばらくしてから再試行してください。")
+		sendError(fmt.Sprintf("Failed to create tool registry for user %s: %v", m.Author.ID, err))
 		return
 	}
 
@@ -346,11 +365,12 @@ func (b *Bot) handleMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 	messages := make([]llm.Message, len(historyMsgs))
 	copy(messages, historyMsgs)
 
-	var finalResponse string
-	for i := 0; i < 10; i++ {
-		// 入力中インジケータを表示（Discordで「入力中…」）
-		s.ChannelTyping(m.ChannelID)
+	editStatus(customEmojiThinking)
+	s.ChannelTyping(m.ChannelID)
 
+	var finalResponse string
+	hasToolCalls := false
+	for i := 0; i < 10; i++ {
 		req := &llm.Request{
 			SystemPrompt: systemPrompt,
 			Messages:     messages,
@@ -360,18 +380,20 @@ func (b *Bot) handleMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 
 		resp, err := client.Generate(ctx, req)
 		if err != nil {
-			log.Printf("LLM generate error for user %s: %v", m.Author.ID, err)
-			s.ChannelMessageSend(m.ChannelID, "エラーが発生しました。しばらくしてから再試行してください。")
+			sendError(fmt.Sprintf("LLM generate error for user %s: %v", m.Author.ID, err))
 			return
 		}
 
-		// ツール呼び出しがない → 最終テキスト応答
 		if len(resp.ToolCalls) == 0 {
 			finalResponse = resp.Content
 			break
 		}
 
-		// モデルの関数呼び出しをメッセージに追加
+		if !hasToolCalls {
+			hasToolCalls = true
+			editStatus("\U0001f527")
+		}
+
 		for _, tc := range resp.ToolCalls {
 			messages = append(messages, llm.Message{
 				Role: "assistant",
@@ -382,7 +404,6 @@ func (b *Bot) handleMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 			})
 		}
 
-		// 各ツールを実行して結果を追加
 		for _, tc := range resp.ToolCalls {
 			tool, ok := registry.Get(tc.Name)
 			if !ok {
@@ -418,10 +439,15 @@ func (b *Bot) handleMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 	}
 
 	if finalResponse == "" {
-		finalResponse = "（ツール実行回数の上限に達しました）"
+		finalResponse = "\uff08\u30c4\u30fc\u30eb\u5b9f\u884c\u56de\u6570\u306e\u4e0a\u9650\u306b\u9054\u3057\u307e\u3057\u305f\uff09"
 	}
 
-	// 10. AI応答をセッションに追加（テキストのみ、FunctionCallは保存しない）
+	// ステータスメッセージを削除（応答送信をもって完了とする）
+	if statusMsg != nil {
+		s.ChannelMessageDelete(m.ChannelID, statusMsg.ID)
+	}
+
+	// 10. AI応答をセッションに追加
 	session.AppendMessage(llm.Message{
 		Role:    "assistant",
 		Content: finalResponse,
@@ -430,14 +456,18 @@ func (b *Bot) handleMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 	// 11. Discord向けフォーマットを適用
 	formatted := formatForDiscord(finalResponse)
 
-	// 12. Discordに送信（2000文字超の場合は分割）
+	// 12. 応答を送信（2000文字超の場合は分割）
 	if len(formatted) > 2000 {
 		chunks := splitMessage(formatted, 2000)
 		for _, chunk := range chunks {
-			s.ChannelMessageSend(m.ChannelID, chunk)
+			if _, err := s.ChannelMessageSend(m.ChannelID, chunk); err != nil {
+				log.Printf("Failed to send response chunk: %v", err)
+			}
 		}
 	} else {
-		s.ChannelMessageSend(m.ChannelID, formatted)
+		if _, err := s.ChannelMessageSend(m.ChannelID, formatted); err != nil {
+			log.Printf("Failed to send response: %v", err)
+		}
 	}
 }
 
